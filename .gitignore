@@ -8,15 +8,9 @@ assets/*
 Resources/*
 macos/assets/*
 macos/Resources/*
-windows/assets/*
-windows/Resources/*
 
 # Local build leftovers
-__pycache__/
-*.pyc
-*.pyo
 *.icns
-*.ico
 *.png
 *.gif
 *.GIF

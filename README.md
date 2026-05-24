@@ -1,19 +1,14 @@
 # 熊 / lazy-bear-desktop
 
-一个桌面宠物项目。GitHub 仓库叫 `lazy-bear-desktop`，应用默认叫 **熊**。
+一个 macOS 桌面宠物项目。GitHub 仓库叫 `lazy-bear-desktop`，应用默认叫 **熊**。
 
-熊会飘在桌面上，可以聊天、换姿势、移动到角落，也可以记住用户偏好、设置自己的性格、做简单计时。macOS 版还可以在你手动开启后读取屏幕文字，然后主动说一句短话。
+熊会飘在桌面上，可以聊天、换姿势、移动到角落，也可以记住用户偏好、设置自己的性格、做简单计时。在你手动开启后，它还可以读取屏幕文字，然后主动说一句短话——但屏幕文字会**先在本机用本地模型脱敏**，再发往云端。
 
-这个仓库分成两个版本：
+详细说明见 [macOS 版文档](macos/README.md)。
 
-- [macOS 版](macos/README.md)
-- [Windows 版](windows/README.md)
-
-仓库默认不自带熊图。使用前，把自己的 GIF 放到对应系统的 `assets/` 文件夹里即可。
+仓库默认不自带熊图。使用前，把自己的 GIF 放到 `macos/assets/` 文件夹里即可。
 
 ## 快速领养熊
-
-### macOS
 
 ```bash
 cd macos
@@ -23,7 +18,7 @@ cp ~/Downloads/your-bear.gif assets/
 open dist/熊.app
 ```
 
-macOS 版会生成：
+构建会生成：
 
 ```text
 macos/dist/熊.app
@@ -31,28 +26,7 @@ macos/dist/熊.app
 
 如果没有单独准备图标，构建时会自动从 GIF 抽第一帧生成 app 图标。
 
-### Windows
-
-```powershell
-cd windows
-mkdir assets
-copy C:\Users\你的名字\Downloads\your-bear.gif assets\
-python bear_windows.py
-```
-
-如果你的电脑用的是 Python 启动器，也可以：
-
-```powershell
-py bear_windows.py
-```
-
-Windows 版也可以放本地图标：
-
-```text
-windows/Resources/BearIcon.ico
-```
-
-## gif问题更新旧版本
+## 更新旧版本
 
 如果你已经有旧版熊，不想重新折腾全部文件，可以只更新代码，自己的熊图和图标不用动。
 
@@ -60,28 +34,16 @@ windows/Resources/BearIcon.ico
 
 ```bash
 git pull
-```
-
-macOS 用户拉完后需要重新构建：
-
-```bash
 cd macos
 ./build.sh
 open dist/熊.app
 ```
 
-Windows 用户拉完后直接重新运行：
-
-```powershell
-cd windows
-python bear_windows.py
-```
-
-不会用 Git 的用户，可以最小替换这些文件：
+不会用 Git 的用户，可以最小替换这两个文件，然后重新运行 `./build.sh`：
 
 ```text
-macOS：替换 macos/BearApp.swift 和 macos/build.sh，然后重新运行 ./build.sh
-Windows：替换 windows/bear_windows.py，然后重新运行 python bear_windows.py
+macos/BearApp.swift
+macos/build.sh
 ```
 
 不要删除自己的这些文件夹：
@@ -89,18 +51,15 @@ Windows：替换 windows/bear_windows.py，然后重新运行 python bear_window
 ```text
 macos/assets/
 macos/Resources/
-windows/assets/
-windows/Resources/
 ```
 
 ## 环境要求
 
-### macOS
-
-- macOS
+- macOS 13 或更新
 - Xcode Command Line Tools
 - 聊天需要用户自己的 DeepSeek API Key
 - “看屏幕/停下”需要手动开启屏幕录制权限
+- “看屏幕/停下”还需要一个本地大模型做隐私脱敏（见下文）
 
 如果还没装过 Xcode Command Line Tools，可以运行：
 
@@ -108,21 +67,11 @@ windows/Resources/
 xcode-select --install
 ```
 
-### Windows
-
-- Windows 10 / 11
-- Python 3
-- 聊天需要用户自己的 DeepSeek API Key
-
-Windows 版暂时不做看屏幕 OCR，先保持简单可跑。
-
 ## 多个姿势
 
 把 GIF 放进 `assets/` 就行。熊会把 `assets/` 里所有 `.gif` 按文件名顺序读进来，然后循环播放。
 
-只放一个 GIF 也可以；放多个 GIF 就会按顺序轮播。
-
-macOS 改完 GIF 后重新运行 `./build.sh`。Windows 运行中新增或替换 GIF 后，下次“换姿势”或自动轮播时会重新读取。
+只放一个 GIF 也可以；放多个 GIF 就会按顺序轮播。改完 GIF 后重新运行 `./build.sh`。
 
 想控制轮播顺序，最简单的方法是给文件名前面加编号，比如：
 
@@ -134,8 +83,6 @@ macOS 改完 GIF 后重新运行 `./build.sh`。Windows 运行中新增或替换
 
 ## 图标
 
-### macOS
-
 默认不用额外准备图标。运行 `./build.sh` 时，如果没有 `Resources/BearIcon.icns`，脚本会自动从熊 GIF 生成 app 图标。
 
 如果你有自己的 `.icns` 图标，把它放到：
@@ -143,16 +90,6 @@ macOS 改完 GIF 后重新运行 `./build.sh`。Windows 运行中新增或替换
 ```text
 macos/Resources/BearIcon.icns
 ```
-
-### Windows
-
-Windows 图标是可选的。如果你有自己的 `.ico` 图标，把它放到：
-
-```text
-windows/Resources/BearIcon.ico
-```
-
-没有图标也能运行，只是快捷方式或窗口图标可能会使用默认样式。
 
 ## 功能
 
@@ -162,18 +99,13 @@ windows/Resources/BearIcon.ico
 - 记住用户偏好
 - 自定义熊的性格
 - 简单计时提醒
-- macOS 手动开启看屏幕
+- 手动开启看屏幕（带本地脱敏）
 
 ## 聊天
 
 打开聊天时，熊会先问一句“你好你好，有什么可以帮您”。后续回答不会每次重复这句固定问候。
 
-第一次聊天时，熊会让你输入 DeepSeek API Key。
-
-- macOS 版会保存到系统钥匙串。
-- Windows 版会保存到本机用户数据目录。
-
-之后再打开熊，一般不需要重复输入。
+第一次聊天时，熊会让你输入 DeepSeek API Key，保存到系统钥匙串（通过 macOS Security 框架直接写入，不经过命令行）。之后再打开熊，一般不需要重复输入。
 
 ## 记忆
 
@@ -207,53 +139,75 @@ windows/Resources/BearIcon.ico
 
 到点后熊会弹出提醒。也可以用 **查看计时**、**清空计时** 管理还没到点的计时。
 
-## 看屏幕
+## 看屏幕（带本地脱敏）
 
-这个功能目前只在 macOS 版里做了。
+“看屏幕/停下”默认关闭。只有你手动开启后，熊才会申请屏幕录制权限。开启后，它会隔一段时间读一次当前屏幕文字。
 
-“看屏幕/停下”默认关闭。只有你手动开启后，熊才会申请屏幕录制权限。开启后，它会隔一段时间读一次当前屏幕文字，然后主动说一句短话。
+为了不把屏幕上的隐私直接发到云端，熊用的是**两段式**：
 
-不开权限也可以使用熊，只是不能读取屏幕内容。
+1. 截图后在本机用 Apple Vision 做 OCR。
+2. OCR 出来的文字**先送到你自己的本地大模型脱敏**：删除密码、验证码、账号、手机号、邮箱等敏感信息。
+3. 只有脱敏后的文字才会发给云端的 DeepSeek，让熊说一句短话。
+
+如果本地模型连不上，这一轮**不会**把原始屏幕文字发往云端（fail-closed）。如果脱敏后没剩下可安全分享的内容，熊也会跳过这一轮。
+
+### 配置本地模型
+
+默认走 [Ollama](https://ollama.com) 的 OpenAI 兼容接口。一台 2060 + 16G 内存的机器跑 3B 量化模型足够：
+
+```bash
+ollama pull qwen2.5:3b
+ollama serve
+```
+
+默认配置：
+
+```text
+地址：http://localhost:11434/v1/chat/completions
+模型：qwen2.5:3b
+```
+
+想换地址或模型，在熊的菜单里选择 **设置本地模型**（快捷键 `⌘G`），或用 **查看本地模型** 看当前配置。任何 OpenAI 兼容的本地服务（Ollama、LM Studio 等）都可以，只要把地址和模型名填对。机器吃力的话可以换更小的模型，比如 `qwen2.5:1.5b`。
+
+不开屏幕录制权限、或不配本地模型，也可以正常使用熊的其他功能，只是用不了看屏幕。
 
 ## 快捷键
 
-macOS 使用 `⌘`，Windows 使用 `Ctrl`。
+macOS 使用 `⌘`。
 
 - `Q`：退出熊
 - `T`：聊天
 - `N`：换姿势
 - `M`：去右下角
+- `S`：看屏幕 / 停下
+- `G`：设置本地模型
 - `R`：记住偏好
 - `P`：设置性格
 - `L`：查看记忆
 - `I`：开始计时
 
-macOS 版额外支持：
-
-- `⌘S`：看屏幕 / 停下
-
 ## 鼠标 / 触控板
 
 - 点一下熊：聊天
 - 按住拖动：移动熊
-- macOS 双指点熊：打开菜单
-- Windows 右键熊：打开菜单
+- 双指点熊：打开菜单
 
 ## 常见问题
 
 ### 没有 GIF 怎么办？
 
-把自己的 `.gif` 放进对应系统的 `assets/` 再运行。
-
-```text
-macos/assets/
-windows/assets/
-```
+把自己的 `.gif` 放进 `macos/assets/` 再运行 `./build.sh`。
 
 ### 没有图标怎么办？
 
-macOS 不用管，会自动从 GIF 生成图标。Windows 可以不放图标，也可以自己放 `windows/Resources/BearIcon.ico`。
+不用管，会自动从 GIF 生成图标。也可以自己放 `macos/Resources/BearIcon.icns`。
+
+### 看屏幕一直说“本地模型没接上”怎么办？
+
+确认本地模型服务在跑（比如 `ollama serve`），并且菜单 **查看本地模型** 里的地址和模型名跟你实际跑的一致。
 
 ### 怎么退出？
 
-macOS 按 `⌘Q` 或 `Esc`。Windows 按 `Ctrl+Q` 或 `Esc`。也可以打开熊的菜单，选择“退出熊”。
+按 `⌘Q` 或 `Esc`，也可以打开熊的菜单，选择“退出熊”。
+</content>
+</invoke>

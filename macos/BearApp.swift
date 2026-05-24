@@ -1,10 +1,29 @@
 import Cocoa
 import ImageIO
+import Security
 import Vision
 
 private let deepSeekURL = URL(string: "https://api.deepseek.com/chat/completions")!
+private let deepSeekModel = "deepseek-chat"
 private let keychainService = "com.lazy-bear-desktop.deepseek"
 private let keychainAccount = NSUserName()
+
+// 本地“隐私守卫”模型：在屏幕文字发往云端前，先在本机脱敏。
+// 默认走 Ollama 的 OpenAI 兼容接口，2060 + 16G 跑得动 3B 量化模型。
+private let defaultLocalEndpoint = "http://localhost:11434/v1/chat/completions"
+private let defaultLocalModel = "qwen2.5:3b"
+
+// 守卫模型的指令：只做脱敏，不闲聊。
+private let privacyGuardPrompt = """
+你是一个本地隐私过滤器，运行在用户自己的电脑上。
+下面给你一段从屏幕 OCR 出来的文字。请删除其中所有敏感信息，例如：
+密码、API key、token、验证码、身份证号、银行卡号、手机号、邮箱、家庭住址、
+私密聊天内容、医疗或财务隐私、公司机密、未公开的个人信息。
+把敏感片段直接删掉或替换成「[已隐藏]」，保留无害的、可以安全分享的内容。
+只输出清洗后的文字本身，不要任何解释、前后缀或额外说明。
+如果整段几乎都是敏感信息，或没有可安全保留的内容，就只输出一个减号「-」。
+"""
+
 private let systemPrompt = """
 你的名字叫熊，是一只懒懒但很温暖、很可爱的桌面小熊。
 你非常喜欢人类，你觉得用户是被你领养的人：你要负责把他照顾好。
@@ -26,11 +45,15 @@ private struct BearData: Codable {
     var memories: [String] = []
     var personality: String = ""
     var reminders: [BearReminder] = []
+    var localEndpoint: String = ""
+    var localModel: String = ""
 
     private enum CodingKeys: String, CodingKey {
         case memories
         case personality
         case reminders
+        case localEndpoint
+        case localModel
     }
 
     init() {}
@@ -40,6 +63,8 @@ private struct BearData: Codable {
         memories = try container.decodeIfPresent([String].self, forKey: .memories) ?? []
         personality = try container.decodeIfPresent(String.self, forKey: .personality) ?? ""
         reminders = try container.decodeIfPresent([BearReminder].self, forKey: .reminders) ?? []
+        localEndpoint = try container.decodeIfPresent(String.self, forKey: .localEndpoint) ?? ""
+        localModel = try container.decodeIfPresent(String.self, forKey: .localModel) ?? ""
     }
 }
 
@@ -92,6 +117,12 @@ private final class BearStore {
 
     func clearReminders() {
         data.reminders.removeAll()
+        save()
+    }
+
+    func setLocalConfig(endpoint: String, model: String) {
+        data.localEndpoint = endpoint
+        data.localModel = model
         save()
     }
 
@@ -257,6 +288,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         appMenu.addItem(actionItem(title: "换姿势", action: #selector(nextStateAction), keyEquivalent: "n"))
         appMenu.addItem(actionItem(title: "去右下角", action: #selector(cornerAction), keyEquivalent: "m"))
         appMenu.addItem(actionItem(title: "看屏幕/停下", action: #selector(toggleWatchAction), keyEquivalent: "s"))
+        appMenu.addItem(actionItem(title: "设置本地模型", action: #selector(setLocalModelAction), keyEquivalent: "g"))
+        appMenu.addItem(actionItem(title: "查看本地模型", action: #selector(showLocalModelAction), keyEquivalent: ""))
         appMenu.addItem(NSMenuItem.separator())
         appMenu.addItem(actionItem(title: "记住偏好", action: #selector(rememberAction), keyEquivalent: "r"))
         appMenu.addItem(actionItem(title: "设置性格", action: #selector(personalityAction), keyEquivalent: "p"))
@@ -310,6 +343,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         menu.addItem(actionItem(title: "换姿势", action: #selector(nextStateAction), keyEquivalent: ""))
         menu.addItem(actionItem(title: "去右下角", action: #selector(cornerAction), keyEquivalent: ""))
         menu.addItem(actionItem(title: "看屏幕/停下", action: #selector(toggleWatchAction), keyEquivalent: ""))
+        menu.addItem(actionItem(title: "设置本地模型", action: #selector(setLocalModelAction), keyEquivalent: ""))
+        menu.addItem(actionItem(title: "查看本地模型", action: #selector(showLocalModelAction), keyEquivalent: ""))
         menu.addItem(NSMenuItem.separator())
         menu.addItem(actionItem(title: "记住偏好", action: #selector(rememberAction), keyEquivalent: ""))
         menu.addItem(actionItem(title: "设置性格", action: #selector(personalityAction), keyEquivalent: ""))
@@ -356,6 +391,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 case "s":
                     self.toggleWatchAction()
                     return nil
+                case "g":
+                    self.setLocalModel()
+                    return nil
                 case "r":
                     self.rememberPreference()
                     return nil
@@ -398,6 +436,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         } else {
             startWatchingScreen()
         }
+    }
+
+    @objc private func setLocalModelAction() {
+        setLocalModel()
+    }
+
+    @objc private func showLocalModelAction() {
+        showLocalModel()
     }
 
     @objc private func rememberAction() {
@@ -670,6 +716,46 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         showAlert(title: "熊提醒你", text: "\(reminder.title)，到点了。")
     }
 
+    private func localEndpointRaw() -> String {
+        let trimmed = store.data.localEndpoint.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? defaultLocalEndpoint : trimmed
+    }
+
+    private func localEndpointURL() -> URL? {
+        URL(string: localEndpointRaw())
+    }
+
+    private func localModelName() -> String {
+        let trimmed = store.data.localModel.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? defaultLocalModel : trimmed
+    }
+
+    private func setLocalModel() {
+        let endpointHint = "本地隐私模型的接口地址（OpenAI 兼容）。\nOllama 默认：\(defaultLocalEndpoint)\n当前：\(localEndpointRaw())\n留空就保持当前。"
+        guard let endpointInput = prompt(title: "本地模型地址", message: endpointHint) else {
+            return
+        }
+        let modelHint = "本地模型名字，比如 \(defaultLocalModel) 或 qwen2.5:1.5b。\n当前：\(localModelName())\n留空就保持当前。"
+        guard let modelInput = prompt(title: "本地模型名字", message: modelHint) else {
+            return
+        }
+        let endpoint = endpointInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        let model = modelInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        let newEndpoint = endpoint.isEmpty ? localEndpointRaw() : endpoint
+        let newModel = model.isEmpty ? localModelName() : model
+        if URL(string: newEndpoint) == nil {
+            showAlert(title: "地址不太对", text: "这个接口地址解析不了，没保存。再检查一下。")
+            return
+        }
+        store.setLocalConfig(endpoint: newEndpoint, model: newModel)
+        showBubble("本地模型设好了：\(newModel)。")
+    }
+
+    private func showLocalModel() {
+        let text = "看屏幕时，屏幕文字会先送到这个本地模型脱敏，再发云端。\n\n地址：\(localEndpointRaw())\n模型：\(localModelName())"
+        showAlert(title: "本地隐私模型", text: text)
+    }
+
     private func startWatchingScreen() {
         guard ensureAPIKey() != nil else {
             showState(index: 0)
@@ -721,24 +807,43 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 self.showBubble("屏幕太安静了，熊也继续躺。")
                 return
             }
-            let appName = NSWorkspace.shared.frontmostApplication?.localizedName ?? "未知程序"
-            let excerpt = String(visibleText.prefix(900))
-            let question = """
-            你是桌面宠物熊，正在主动和用户互动。你会看到一些屏幕 OCR 文字，但不要复述隐私、账号、论文原文或文件名。
-            当前前台应用：\(appName)
-            屏幕文字片段：
-            \(excerpt)
+            // 先在本机用本地模型脱敏，再决定要不要发云端。
+            self.sanitizeWithLocalModel(visibleText) { cleaned, failure in
+                guard self.isWatchingScreen else {
+                    self.isCommentingOnScreen = false
+                    return
+                }
+                if let failure {
+                    // fail-closed：本地脱敏没成功，就绝不把原始屏幕文字发到云端。
+                    self.isCommentingOnScreen = false
+                    self.showBubble("本地模型没接上，这轮不发云端。（\(failure)）")
+                    return
+                }
+                let safeText = (cleaned ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !safeText.isEmpty, safeText != "-" else {
+                    self.isCommentingOnScreen = false
+                    self.showBubble("屏幕上多是私密内容，熊就不往云端说了。")
+                    return
+                }
+                let appName = NSWorkspace.shared.frontmostApplication?.localizedName ?? "未知程序"
+                let excerpt = String(safeText.prefix(900))
+                let question = """
+                你是桌面宠物熊，正在主动和用户互动。下面这段屏幕文字已经在本地脱敏过，可以安全参考，但仍不要复述文件名或大段原文。
+                当前前台应用：\(appName)
+                屏幕文字片段（已脱敏）：
+                \(excerpt)
 
-            请只用中文回复一句，总长度尽量不超过45字。语气懒懒的、可爱、一针见血。不要以固定问候开头，不要说“我看到你的屏幕”。
-            """
-            self.askDeepSeekForBubble(apiKey: key, question: question)
+                请只用中文回复一句，总长度尽量不超过45字。语气懒懒的、可爱、一针见血。不要以固定问候开头，不要说“我看到你的屏幕”。
+                """
+                self.askDeepSeekForBubble(apiKey: key, question: question)
+            }
         }
     }
 
     private func captureScreenText(completion: @escaping (String) -> Void) {
         DispatchQueue.global(qos: .utility).async {
             let tempURL = URL(fileURLWithPath: NSTemporaryDirectory())
-                .appendingPathComponent("jokebear-screen-\(UUID().uuidString).png")
+                .appendingPathComponent("lazy-bear-screen-\(UUID().uuidString).png")
             let process = Process()
             process.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
             process.arguments = ["-x", tempURL.path]
@@ -823,16 +928,55 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     private func sendDeepSeek(apiKey: String, question: String, completion: @escaping (String?, String?) -> Void) {
-        var request = URLRequest(url: deepSeekURL)
+        sendChatCompletion(
+            endpoint: deepSeekURL,
+            apiKey: apiKey,
+            model: deepSeekModel,
+            systemPrompt: systemPromptWithMemory(),
+            userContent: question,
+            completion: completion
+        )
+    }
+
+    private func sanitizeWithLocalModel(_ text: String, completion: @escaping (String?, String?) -> Void) {
+        guard let endpoint = localEndpointURL() else {
+            completion(nil, "本地地址无效")
+            return
+        }
+        sendChatCompletion(
+            endpoint: endpoint,
+            apiKey: nil,
+            model: localModelName(),
+            systemPrompt: privacyGuardPrompt,
+            userContent: text,
+            timeout: 60,
+            completion: completion
+        )
+    }
+
+    // 统一的 OpenAI 兼容 /chat/completions 调用。云端 DeepSeek 和本地模型都走这里。
+    private func sendChatCompletion(
+        endpoint: URL,
+        apiKey: String?,
+        model: String,
+        systemPrompt: String,
+        userContent: String,
+        timeout: TimeInterval = 30,
+        completion: @escaping (String?, String?) -> Void
+    ) {
+        var request = URLRequest(url: endpoint)
         request.httpMethod = "POST"
-        request.timeoutInterval = 30
-        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        request.timeoutInterval = timeout
+        if let apiKey, !apiKey.isEmpty {
+            request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        }
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try? JSONSerialization.data(withJSONObject: [
-            "model": "deepseek-chat",
+            "model": model,
+            "stream": false,
             "messages": [
-                ["role": "system", "content": systemPromptWithMemory()],
-                ["role": "user", "content": question],
+                ["role": "system", "content": systemPrompt],
+                ["role": "user", "content": userContent],
             ],
         ])
 
@@ -988,32 +1132,50 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         alert.runModal()
     }
 
+    private func keychainBaseQuery() -> [String: Any] {
+        [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: keychainService,
+            kSecAttrAccount as String: keychainAccount,
+        ]
+    }
+
+    // 用 Security 框架直接读写钥匙串，key 不再作为命令行参数出现在进程列表里。
     private func readKeyFromKeychain() -> String? {
-        runSecurity(["find-generic-password", "-a", keychainAccount, "-s", keychainService, "-w"])
+        var query = keychainBaseQuery()
+        query[kSecReturnData as String] = true
+        query[kSecMatchLimit as String] = kSecMatchLimitOne
+
+        var item: CFTypeRef?
+        let status = SecItemCopyMatching(query as CFDictionary, &item)
+        guard status == errSecSuccess,
+              let data = item as? Data,
+              let key = String(data: data, encoding: .utf8) else {
+            return nil
+        }
+        return key.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private func saveKeyToKeychain(_ key: String) {
-        _ = runSecurity(["add-generic-password", "-a", keychainAccount, "-s", keychainService, "-w", key, "-U"])
-    }
+        guard let data = key.data(using: .utf8) else { return }
+        let baseQuery = keychainBaseQuery()
 
-    private func runSecurity(_ args: [String]) -> String? {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/security")
-        process.arguments = args
-        let output = Pipe()
-        process.standardOutput = output
-        process.standardError = Pipe()
-        do {
-            try process.run()
-            process.waitUntilExit()
-        } catch {
-            return nil
+        // 已存在就更新，没有就新增；两种情况都不把 key 放进命令行。
+        let updateStatus = SecItemUpdate(
+            baseQuery as CFDictionary,
+            [kSecValueData as String: data] as CFDictionary
+        )
+        if updateStatus == errSecItemNotFound {
+            var addQuery = baseQuery
+            addQuery[kSecValueData as String] = data
+            addQuery[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlocked
+            let addStatus = SecItemAdd(addQuery as CFDictionary, nil)
+            if addStatus != errSecSuccess {
+                NSLog("Keychain save failed: \(addStatus)")
+            }
+        } else if updateStatus != errSecSuccess {
+            NSLog("Keychain update failed: \(updateStatus)")
         }
-        guard process.terminationStatus == 0 else {
-            return nil
-        }
-        let data = output.fileHandleForReading.readDataToEndOfFile()
-        return String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
 
